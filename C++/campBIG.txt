@@ -1,0 +1,81 @@
+// TÁBOROZTATÁS
+
+// EMBEREK
+ int F = ...; // fiúk száma
+ int L = ...; // lányok száma
+ 
+ int N = F+L; // táborozók száma
+ range People = 1..N;
+ range Boys = 1..F;
+ range Girls = F+1..N;
+ 
+// SZOBÁK
+ int M = ...; // szoba típusok száma
+ range Type = 1..M;
+ range Rooms = 1..N; // szobák száma az egyes típusokból
+ 
+ int capacity[Type] = ...; // szobák férőhelye
+ float cost[Type] = ...;	// költsége
+
+// SZINTEK
+ int S = ...; // szintek száma
+ range Floors = 1..S; 
+ int costS = ...; // szint nyitási költség
+ int floors[Type] = ...; // elérhető maximális számuk szintenként
+ 
+
+// ELHELYEZÉS: 
+// <ki, milyen szobába, hányadik szobába, melyik szinten>
+ tuple arrange	{int person; int room; int number; int floor_;}
+ setof(arrange)	Inc = {<person, room, number, floor_> | 
+ 						person in People, room in Type, number in Rooms, floor_ in Floors};
+ dvar boolean x[Inc]; // táborozók elhelyezési mátrixa: p ember r férőhelyes szobából az n-dikbe
+ 
+// SEGÉDVÁLTOZÓK
+// megnyílik-e a szoba
+ tuple dorm		{int room; int number; int floor_;}
+ setof(dorm)	Dorm = {<room, number, floor_> | room in Type, number in Rooms, floor_ in Floors};
+ dvar boolean y[Dorm];
+ 
+// megnyílik-e a szint
+ dvar boolean z[Floors]; 
+ 
+// egy szobára kerülnek-e
+ tuple	edge  	{int i; int j; int room; int number; int floor_;}
+ setof(edge)	Contacts = { <i,j,r,n,f> | i,j in People, r in Type, n in Rooms, f in Floors};
+ dvar int w[Contacts];
+ 
+ tuple ij {int i; int j;};
+ setof(ij) pairs = {<i,j> | i,j in People};
+ float	pref[pairs] = ...;
+ 
+
+ 
+// CÉLFÜGGVÉNY
+ int K = ...;
+ minimize K*(sum(r in Type, n in Rooms, f in Floors) y[<r,n,f>]*cost[r] + sum(f in Floors) z[f]*costS) 
+ 		   - sum(i,j in People, r in Type, n in Rooms, f in Floors) w[<i,j,r,n,f>]*pref[<i,j>];
+ 
+ subject to{
+  forall(p in People) sum(r in Type, n in Rooms, f in Floors) x[<p,r,n,f>] == 1; 
+  // minden táborozó pontosan egy szobába
+  
+  forall(r in Type, n in Rooms, f in Floors) sum(p in People) x[<p,r,n,f>] >= 2*y[<r,n,f>];
+  // senki sem kerül egyedül egy szobába
+  
+  //forall(f in Floors) sum(r in Type, n in Rooms) y[<r,n,f>] >= 2*z[f]; 
+  // senki sem kerül egyedül egy szobába: BÓNUSZ
+  
+  forall(b in Boys, g in Girls, r in Type, n in Rooms, f in Floors) x[<b,r,n,f>] + x[<g,r,n,f>] <= 1;
+  // fiú-lány szobák
+  
+  forall(r in Type, n in Rooms, f in Floors) sum(p in People) x[<p,r,n,f>]  <= y[<r,n,f>] * capacity[r]; 
+  // Minden szobában elférnek az ott-lakók
+  
+  forall(r in Type, f in Floors) sum(r in Type, n in Rooms) y[<r,n,f>] <= floors[r]*z[f];
+  // Nem használunk több szobát, mint ami elérhető
+  
+  forall(p1 in People, p2 in People, r in Type, n in Rooms, f in Floors) 
+  			w[<p1,p2,r,n,f>] <= (x[<p1,r,n,f>]+x[<p2,r,n,f>])/2;
+  // w-t minél nagyobbra akarja a minimalizálási feltétel
+ }

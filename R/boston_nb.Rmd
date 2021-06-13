@@ -1,0 +1,230 @@
+---
+title: "Partial regression on the Boston Housing Dataset"
+author: "Michaletzky Tamás (PMBLWY)"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+  html_notebook: default
+---
+
+# Abstract
+We will do partial least square  regression (_plsr_) on the commonly-used Boston dataset in language R using the package `pls`. This method is often used when we build such a linear model where there are relatively few samples but many, possibly correlated predictors.^[See section 2 in https://cran.r-project.org/web/packages/pls/vignettes/pls-manual.pdf] In such cases it is well-known that standard multiple regression models could fail.^[https://www.wikiwand.com/en/Partial_least_squares_regression] Our main aim is to predict the median value of Boston houses with as less predictors as possible using _plsr_.
+
+# Preparation
+
+```{r}
+rm(list = ls())
+
+options(digits = 4)
+```
+
+```{r}
+#install.packages("pls")
+library(pls)
+
+#install.packages("MASS")
+library(MASS)
+
+#install.packages("corrplot")
+library(corrplot)
+```
+
+After cleaning memory from junk and installing packages needed we should attach the Boston data set.
+```{r}
+data(Boston)
+attach(Boston)
+
+?Boston
+```
+
+The dataset contains 506 rows and 14 columns (13 predictors and 1 target value `medv`).
+```{r}
+head(Boston)
+```
+
+We can get an overview of the dataset or from a certain variable:
+```{r}
+summary(medv)
+```
+
+Plotting the correlation table it is seen that `lstat` and `rm` are significantly correlated (negatively and positively, respectively) with target value `medv`, but one could also observe that there are other significant correlations between predictors, for example `indus`, `dis` and `tax` are highly correlated with the others, among many as well. It is also foreshadowed that the dummy variable `chas` could be negligable.
+```{r}
+corrplot(cor(Boston), type="upper")
+```
+
+Given these circumstances and the relative few samples against the number of predictors it sounds a good idea to use _plsr_.
+
+Before building a model one should split the data randomly into training and testing part. We will use the standard `75%` splitting.
+```{r}
+sample_size <- floor(0.75*nrow(Boston))
+train_indicies <- sample(seq_len(nrow(Boston)), size=sample_size)
+
+train <- Boston[train_indicies, ]
+test <- Boston[-train_indicies, ]
+```
+
+We should also check if there is any missing values but there is no.
+```{r}
+any(is.na(Boston))
+```
+
+
+We are now ready to build our models.
+
+# Build the model
+
+## First model
+At first let's see what one could got using only the significantly correlated predictors. This is what we will try to improve.
+```{r}
+M0 <- plsr(medv ~ lstat+rm, data = train)
+summary(M0)
+```
+```{r}
+plot(M0, "prediction", newdata=test, line=TRUE, asp=1)
+plot(RMSEP(M0, newdata=test), legendpos="topright")
+```
+
+
+## _PLSR_ model
+
+### Dimension reduction
+For the _plsr_ model we should use all the predictors. For validation we will use `"LOO"`, _leave-one-out_ cross-validated predictions. 
+```{r}
+M1 <- plsr(medv ~ crim + zn + indus + chas + nox + rm + age + dis + rad + tax + ptratio + black + lstat, data = train, validation="LOO")
+summary(M1)
+```
+
+At first let's see wether there is a reason not to use linear predictions.
+```{r}
+plot(M1, asp = 1, line = TRUE)
+```
+This seems fine, although the values on the right hand side looks fake at first glance, therefore may need to outline if the model got bad from them. 
+
+So now let's reduce the number of components. For this we shall plot the _RMSEP_, the root mean squared error of prediction, indicating how many components we should leave.
+```{r}
+M1.ncomp <- selectNcomp(M1, method = "randomization", plot=TRUE)
+M <- update(M1, ncomp=M1.ncomp)
+```
+
+This premises that `M1.ncomp` components will be enough for model `M`. That is, with this splitting is 10.^[It is worth mentioning that with different random splitting one could get 9 components, not 10, as it is here stated. Or at least I could.]
+
+### Checking for anomalies
+
+Looking at the correlation and score plot of loadings we can say that there is no clear indication of grouping or outlying predictors.
+```{r}
+plot(M, "correlation")
+plot(M, plottype = "scores", comps=1:M1.ncomp)
+```
+
+Plotting the coefficients it is also seen that while some seems to be close to one-another the last used components is needed, or at least adds a significant change to the model.
+```{r}
+plot(M, "coefficients", comps=1:M1.ncomp, legendpos="topleft")
+```
+
+
+
+### Predictions and evaluating the model
+
+As there is no indication for the model to fail trivially we should see the results on the test dataset. 
+```{r}
+plot(M, ncomp = M1.ncomp, newdata=test, asp = 1, line = TRUE)
+```
+Plotting the predictions on the `test` dataset one shall say that the model looks fine.
+
+Also the _RMSEP_ and explained variances looks promising.
+```{r}
+M.rmsep <- RMSEP(M, newdata=test)
+plot(M.rmsep, legendpos = "topright")
+```
+
+```{r}
+explvar(M1)
+sum(explvar(M))
+```
+
+# Other models
+
+## _PCR_
+_PCR_ stands for principal component regression. Due to the authors of the `pls` package it is usual that _plsr_ models use less components than _pcr_ models, but not yet proven nor been falsified.^[See section 2.2 in https://cran.r-project.org/web/packages/pls/vignettes/pls-manual.pdf] This time we only need one more component. 
+```{r}
+M.pcr <- pcr(medv ~ crim + zn + indus + chas + nox + rm + age + dis + rad + tax + ptratio + black + lstat, data = train, validation="LOO")
+summary(M.pcr)
+
+ncomp.pcr <- selectNcomp(M.pcr, method = "randomization", plot=TRUE)
+
+M3 <- update(M.pcr, ncomp=ncomp.pcr)
+plot(M3, newdata=test, asp=1, line=TRUE)
+
+explvar(M.pcr)
+sum(explvar(M3))
+```
+
+## Scaled _plsr_ model
+We can also lower the number of components needed if one uses scaling on the predictors.
+```{r}
+M.sc <- update(M1, scale = TRUE)
+summary(M.sc)
+
+ncomp.scaled <- selectNcomp(M.sc, method = "randomization", plot = TRUE)
+
+M2 <- update(M.sc, ncomp=ncomp.scaled)
+plot(M2, newdata=test, line=TRUE, asp = 1)
+
+explvar(M.sc)
+sum(explvar(M2))
+```
+
+# Comparisons
+A barplot on the coefficients on the 3 latter models shows that while the one built with scaling differs a lot the other two are closely the same.
+```{r}
+coefs <- matrix(c(coef(M1), coef(M.sc), coef(M.pcr)), ncol = 3)
+barplot(t(coefs), beside=TRUE)
+
+coefs[,c(1,3)]
+sqrt(sum(coef(M1), -coef(M.pcr))^2/13)
+```
+
+Also comparing the _RMSEP_s reveals that there is a significant difference between the models built with or without scaling.
+```{r}
+make_rmsep <- function(model){   result <- RMSEP(model, newdata=test)[["val"]]  }
+
+x<-1:14
+y1<-make_rmsep(M1)
+y2<-make_rmsep(M.sc)
+y3<-make_rmsep(M.pcr)
+y4<-make_rmsep(M0)
+
+plot(x,y1,type="l", xlab = "number of components", ylab = "RMSEP", main = "Comparison on RMSEP's of different models")
+lines(x,y2, type = "l", col="red")
+lines(x,y3,type = "l", col="green")
+lines(1:3,y4, type="l", col="blue")
+legend("topright", legend = c("normal PLSR", "scaled PLSR", "PCR", "simple PLSR"), col = c("black","red", "green", "blue"), lty = 1)
+```
+
+
+Additionally we also have seen that the ovarall explained variance differs as well.
+```{r}
+options(digits = 6)
+sum(explvar(M))
+sum(explvar(M2))
+sum(explvar(M3))
+```
+
+
+# Conclusions
+We built in total 4 models based on _plsr_ methods. We can conlude that we could build a better model than the trivial first one. We can also conlcude that there was no practical effects for building a model with _pcr_. The remaining two models compete: while having less components for the same amount of _RMSEP_ error, the scaled model also explaines less variance on the data than the more components normal model.
+
+Therefore it is now up to further considerations depending our goals to decide which model to go with. 
+
+# Appendix: About RMarkdown
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Ctrl+Alt+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Ctrl+Shift+K* to preview the HTML file).
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.

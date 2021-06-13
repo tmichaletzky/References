@@ -1,0 +1,306 @@
+---
+title: "Rekurzív darabolás a Titanic adathalmazon"
+author: "Michaletzky Tamás (PMBLWY)"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+  html_notebook: default
+---
+
+# Összefoglalás
+Az R beépített Titanic adathalmazán fogunk korrespondencia-analízist és rekurzív darabolást elvégezni. Az adathalmaz a Titanic utaslistáját tartalmazza 12 váltózóban. A számunkra fontos változók:
+
+- `survived`: (bool) 1 - túlélte, 0 -  meghalt
+- `pclass`: (int range(1,3)) milyen osztályon utazott
+- `sex`: (categorial, string) male - férfi, female - nő
+- `age`: (int) kor
+- `sibsp`: (int) testvérek/házatársak száma a járaton
+- `parch`: (int) gyermekek/szülők száma a járaton
+
+Hipotéziseink:
+- Az elmondások alapján a nőket és a gyermekeket és időseket mentették először.
+- Az első osztályú utasok előnyt élveztek a mentésnél.
+- Bármilyen hozzátartozó a járaton tartózkodása csökkentette az életben maradási esélyt, mert őket is menteni akarták.
+
+Nézzük meg, igazunk van-e?
+
+
+# Adatok előkészítése
+Kétféle adaton fogunk dolgozni:
+- a `titanic_train` és `titanic_test` 12 változós, ám a `test` változat nem tartalmazza a túlélést
+- a `Titanic` adathalmaz pedig csak a `Pclass`, `Age` és `Sex` faktorokat tartalmazza, ám mindenkire a `Survived` adatot.
+
+```{r}
+rm(list=ls())
+```
+
+```{r}
+#install.packages("rpart")
+#install.packages("titanic")
+#install.packages("datasets")
+#install.packages("rpart.plot")
+
+# import
+library(MASS) #corresp analysis
+library("rpart") #recursive partition
+library("rpart.plot")
+library(corrplot)
+library(titanic)
+library(datasets)
+
+data <- titanic_train
+
+
+head(data)
+summary(data)
+```
+
+
+# Ismerkedés az adatokkal
+Az adattípusok:
+```{r}
+str(data)
+```
+Különöző értékek száma faktoronként:
+```{r}
+apply(data,2, function(x) length(unique(x)))
+```
+
+Hiányzó adatok: az `Age` és `Cabin` változókban. Ez utóbit nem fogjuk használni. 
+```{r}
+colSums(is.na(data))
+colSums(data=="")
+```
+A `Cabin` változó ígéretes lenne, ha nem lenne ennyi sok hiányzó adat benne, hiszen várhatóan a lenti hálórészeket hamarabb lepte el víz; várhatóan persze erősen korrelálna a `Pclass`-szal is.
+
+## Az adatok eloszlása
+```{r}
+hist(data$Age)
+barplot(sort(table(data$Pclass), decreasing = T))
+```
+
+Összetett kontingencia ábra
+```{r}
+data$Maturity <- cut(data$Age, breaks=c(0, 18, 55, 150), right = FALSE, 
+                     labels = c('young', 'adult', 'old'))
+mosaicplot(Survived ~ Sex + Pclass + Maturity, data=data, shade=TRUE)
+```
+
+Korrelációs tábla
+
+```{r}
+cm = cor(data[,c("PassengerId","Survived","Pclass","Age","SibSp","Parch","Fare")], ,use="complete")
+corrplot(cm)
+```
+
+
+
+# Korrespondencia analízis
+
+## Korra vonatkozó hipotézis
+Szignifikáns különbség van a túlélsben korosztály szerint:
+```{r}
+Tage <- table(data$Survived, data$Maturity)
+Tage
+chisq.test(Tage)
+```
+
+
+## A nemre vonatkozó hipotézis
+Hasonlóképpen a nemek között is:
+```{r}
+Tsex <- table(data$Survived, data$Sex)
+Tsex
+chisq.test(Tsex)
+```
+
+## Az osztályra vonatkozó hipotézis
+És az osztályok között is:
+```{r}
+Tclass <- table(data$Survived, data$Pclass)
+Tclass
+chisq.test(Tclass)
+```
+## Egyéb vizsgálat
+Mi történik a hozzátartozók esetén? Később fontos lesz a döntési fáknál.
+```{r}
+Tparch <- table(data$Survived, data$Parch)
+Tparch 
+```
+```{r}
+Tsibsp <- table(data$Survived, data$SibSp)
+Tsibsp
+```
+
+
+
+
+# Rekurzív darabolás
+Most nézzük meg, hogyan épülnek egymásra a fenti információk a döntési fa felépítésénél!
+
+
+Ha minden változót beleveszünk, a modell érthető módon a neveket fogja felhasználni, 100%-os sikerességgel beazonosítva a tanuló adathalmzon: túltanulva garantáltan gyenge teljesítménnyel a teszt adathalmazon!
+```{r}
+Mhuge <- rpart(Survived ~ ., 
+               data=data, 
+               method='class',
+               control = rpart.control(cp = 0, minbucket = 2, xval = 10))
+printcp(Mhuge)
+```
+
+Nem elég azonban az sem, ha kizárjuk az egyedi azonosítokat ("PassengerId", "Name"), mert így sem átülthethető jellemzőkre tanul rá:   
+```{r}
+Mall <-  rpart(Survived ~ ., 
+               data=data[ , ! names(data) %in% c("PassengerId", "Name")], 
+               method='class',
+               control = rpart.control(cp = 0, minbucket = 2, xval = 10))
+printcp(Mall)
+```
+
+## Alapmodell
+Vegyük tehát alapmodellnek a következőt: az "Age", "Pclass" és "Age" alapján osztályozzunk!
+```{r}
+M <- rpart(Survived ~ Age + Sex + Pclass, data=data, method='class',
+           control = rpart.control(cp = 0, minbucket = 2, xval = 10))
+printcp(M)
+```
+Ez már ígéretes! Rajzoljuk ki:
+```{r}
+#par(mar = c(0,0,0,0))
+rpart.plot(M, branch = .1, compress = TRUE)
+#text(M)
+```
+A paraméterek:
+```{r}
+str(M$frame)
+```
+### A döntési fa elemzése
+39 levél, 0-1-es ráírva, 891 adaton, az egyes leveleken a igazságkiértékelés:
+```{r}
+ind <- M$frame[,"var"]=="<leaf>" 
+sum(ind) 
+
+M$frame[ind,"n"]
+sum(M$frame[ind,"n"]) 
+
+L <- attributes(M)$ylevels
+L
+
+L[M$frame[ind,"yval"]]
+
+
+M$frame[ind,c("yval","n")]
+```
+
+
+Az aggregátumok: 578 halott, 313 túlélő
+```{r}
+W <- aggregate(M$frame[ind,"n"],by=list(L[M$frame[ind,"yval"]]),FUN=sum)
+w<-W[,2];names(w)<-W[,1]
+w
+```
+
+
+### Predikciós mutatók
+```{r}
+C <- predict(M,type ="class")
+table(C)
+```
+A modell pontossága: 86%
+```{r}
+table(data$Survived,C)
+sum(diag(table(data$Survived,C)))/nrow(data)
+```
+
+
+### Redukált alapmodell
+A fa egyszerűsítése után a `Pclass` változó már nem szignifikáns:
+```{r}
+Mred <- prune(M, cp = 0.02)
+Mred
+printcp(Mred)
+```
+A redukált fa:
+```{r}
+#par(mar = c(0,0,0,0))
+rpart.plot(Mred, branch = 0.3, compress = TRUE)
+#text(Mred,col="red")
+```
+
+Az igazságértékelés: 80%-os pontosság megmaradt
+```{r}
+Cred<-predict(Mred,type ="class")
+table(data$Survived,Cred)
+sum(diag(table(data$Survived,Cred)))/nrow(data)
+```
+A keletkezett hiba: 40 hibás halott, 15 hibás túlélő
+```{r}
+diag(table(data$Survived,C))-diag(table(data$Survived,Cred))
+```
+
+## Bővített modell
+Nyerünk-e a valamit, ha a `SibSp` és `Parch` változókat is belevesszük a modellbe?
+```{r}
+Mext <- rpart(Survived ~ Age + Sex + Pclass + SibSp + Parch, data=data, method='class',
+           control = rpart.control(cp = 0, minbucket = 2, xval = 10))
+printcp(Mext)
+```
+A bővített fa:
+```{r}
+#par(mar = c(0,0,0,0))
+rpart.plot(Mext, branch = .1, compress = TRUE)
+#text(Mext)
+```
+És a bővített redukált fa paraméterei: a `Pclass` és `Parch` változók eltűntek
+```{r}
+M2 <- prune(Mext, cp = 0.02)
+printcp(M2)
+```
+A redukált ábra:
+```{r}
+#par(mar = c(0,0,0,0))
+rpart.plot(M2, branch = .1, compress = TRUE)
+#text(M2)
+```
+Vagyis a fa szerint:
+- a nők mind túlélnek
+- a 6,5 évnél idősebb férfiak meghalnak
+- de az annál fiatalabb fiúk is meghalnak, ha több mint 2 testvérükkel együtt tartózkodtak a hajón
+
+Mennyire pontos ez?
+```{r}
+Cred2<-predict(M2,type ="class")
+table(data$Survived,Cred2)
+sum(diag(table(data$Survived,Cred2))) / nrow(data)
+```
+Meglepő módon 80%-os pontossághoz ez az egyszerűsítés is elég.
+
+## Finomhangolások
+A jól sikerült modellek finomhangolása
+
+# Kiértékelés a teszt halmazon
+Értékeljük ki a teszt halmazon is!
+```{r}
+test <- titanic_test
+```
+
+Először a redukált alapmodellt:
+```{r}
+Ctest <- predict(Mred, test, type="class")
+table(Ctest)
+```
+Majd a bővített redukált modellt is:
+```{r}
+Ctest2 <- predict(M2, test, type="class")
+table(Ctest2)
+```
+Sajnos valamiért a teszt halmazon nem áll rendelkezésre a valós eredmény, tehát ezt nem tudjuk most ellenőrizni. De hasonlóképpen lehetne, mint feljebb. 
+
+
+# Összefoglalás
+- Megállapíthatjuk, hogy a hipotéziseink igaznak bizonyultak
+- Másrészt megismertük az egymásra épülésüket is a döntési fák segítségével
+
+
+
